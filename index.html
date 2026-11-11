@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Опитування</title>
+<style>
+  body { margin:0; font-family: Montserrat, Arial, sans-serif; background:#fff; color:#111; }
+  .wrap { max-width:480px; margin:0 auto; padding:24px 20px; text-align:center; }
+  h1 { font-size:20px; margin:8px 0 16px; }
+  .hidden { display:none !important; }
+  .val { font-size:28px; font-weight:600; margin:12px 0; color:#FA8008; }
+  input[type=range] { width:100%; accent-color:#FA8008; }
+  button { background:#FA8008; color:#fff; border:none; border-radius:999px; padding:14px 22px;
+           font-size:16px; cursor:pointer; width:100%; margin:8px 0; }
+  button.opt { background:#fff; color:#111; border:2px solid #FA8008; }
+  button.opt.sel { background:#FA8008; color:#fff; }
+  .status { color:#666; margin-top:16px; font-size:14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1 id="title">Очікуємо на опитування…</h1>
+
+  <!-- Слайдер -->
+  <div id="sliderBox" class="hidden">
+    <p>Скільки хвилин студент реально концентрується на поясненні викладача?</p>
+    <div class="val" id="sliderVal">—</div>
+    <input type="range" id="slider" min="0" max="1000" value="500" step="1">
+    <p style="font-size:13px;color:#666">від 1 секунди до 1 години</p>
+    <button id="sliderSend">Відправити</button>
+  </div>
+
+  <!-- Мемі -->
+  <div id="memeBox" class="hidden">
+    <p>Оберіть мем, щоб розкрити «ворога» цифрового покоління</p>
+    <div id="memeOpts"></div>
+    <button id="memeSend" class="hidden">Відправити</button>
+  </div>
+
+  <div class="status" id="status"></div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script src="config.js"></script>
+<script>
+firebase.initializeApp(FIREBASE_CONFIG);
+const db = firebase.database();
+
+// Унікальний ідентифікатор телефону, щоб один студент голосував один раз (перезаписує свій голос)
+let deviceId = localStorage.getItem('deviceId');
+if (!deviceId) { deviceId = Math.random().toString(36).slice(2) + Date.now().toString(36); localStorage.setItem('deviceId', deviceId); }
+
+// Логарифмічна шкала: 0..1000 → 1 с .. 3600 с
+const MIN = 1, MAX = 3600;
+function secToLabel(s) {
+  if (s < 60) return s + ' с';
+  const m = Math.floor(s / 60), r = s % 60;
+  if (s >= 3600) return '1 год';
+  return m + ' хв' + (r ? ' ' + r + ' с' : '');
+}
+const slider = document.getElementById('slider');
+const sliderVal = document.getElementById('sliderVal');
+function updateSlider() {
+  const s = Math.max(MIN, Math.round(MIN * Math.pow(MAX / MIN, slider.value / 1000)));
+  sliderVal.textContent = secToLabel(s);
+  sliderVal.dataset.sec = s;
+}
+slider.addEventListener('input', updateSlider);
+updateSlider();
+
+document.getElementById('sliderSend').onclick = () => {
+  const sec = Number(sliderVal.dataset.sec);
+  db.ref('votes/' + currentPollId + '/' + deviceId).set({ value: sec, at: Date.now() });
+  document.getElementById('status').textContent = 'Дякую! Відповідь прийнято.';
+};
+
+// Меми
+let memeChoice = null;
+const memeOpts = document.getElementById('memeOpts');
+(MEMES || []).forEach(m => {
+  const b = document.createElement('button');
+  b.className = 'opt';
+  b.textContent = m.label;
+  b.onclick = () => {
+    memeChoice = m.id;
+    document.querySelectorAll('#memeOpts button').forEach(x => x.classList.remove('sel'));
+    b.classList.add('sel');
+    document.getElementById('memeSend').classList.remove('hidden');
+  };
+  memeOpts.appendChild(b);
+});
+document.getElementById('memeSend').onclick = () => {
+  db.ref('votes/' + currentPollId + '/' + deviceId).set({ value: memeChoice, at: Date.now() });
+  document.getElementById('status').textContent = 'Дякую! Відповідь прийнято.';
+};
+
+// Стан, який керуєш ти з host.html
+let currentPollId = null;
+db.ref('state').on('value', snap => {
+  const s = snap.val() || {};
+  currentPollId = s.pollId || null;
+  document.getElementById('sliderBox').classList.toggle('hidden', !(s.type === 'slider' && s.open));
+  document.getElementById('memeBox').classList.toggle('hidden', !(s.type === 'memes' && s.open));
+  document.getElementById('title').textContent = s.open ? 'Ваша відповідь' : 'Очікуємо на опитування…';
+  document.getElementById('status').textContent = '';
+  // скидаємо вибір мему при новому опитуванні
+  if (s.type === 'memes') { memeChoice = null; document.getElementById('memeSend').classList.add('hidden'); }
+  // сховати відповідь, якщо голос уже був у цьому опитуванні
+  if (currentPollId) {
+    db.ref('votes/' + currentPollId + '/' + deviceId).once('value').then(v => {
+      if (v.exists()) document.getElementById('status').textContent = 'Ваша відповідь уже враховано. Можна змінити до закриття опитування.';
+    });
+  }
+});
+</script>
+</body>
+</html>

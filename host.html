@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ведучий</title>
+<style>
+  body { margin:0; font-family: Montserrat, Arial, sans-serif; background:#050505; color:#fff; }
+  .wrap { max-width:960px; margin:0 auto; padding:24px; }
+  h1 { font-size:22px; }
+  .btns button { background:#FA8008; color:#fff; border:none; border-radius:999px; padding:12px 18px;
+                 font-size:15px; cursor:pointer; margin:4px; }
+  .btns button.gray { background:#333; }
+  .card { background:#111; border-radius:16px; padding:20px; margin-top:20px; }
+  .big { font-size:40px; color:#FA8008; font-weight:700; }
+  .row { display:flex; align-items:center; margin:6px 0; }
+  .lbl { width:260px; font-size:15px; }
+  .bar { height:26px; background:#FA8008; border-radius:6px; }
+  .pct { margin-left:10px; font-size:15px; }
+  .hist { display:flex; align-items:flex-end; gap:6px; height:200px; margin-top:12px; }
+  .hist div { flex:1; background:#FA8008; border-radius:4px 4px 0 0; min-height:2px; position:relative; }
+  .axis { display:flex; justify-content:space-between; font-size:12px; color:#aaa; margin-top:6px; }
+  .muted { color:#aaa; font-size:14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Ведучий</h1>
+
+  <div class="btns">
+    <button onclick="openPoll('slider', 'slider_concentration')">Відкрити слайдер (концентрація)</button>
+    <button onclick="openPoll('memes', 'memes_enemy1')">Відкрити меми «Ворог №1»</button>
+    <button class="gray" onclick="closePoll()">Закрити опитування</button>
+  </div>
+
+  <div class="card" id="resultCard">
+    <div class="muted" id="pollInfo">Опитування не відкрито</div>
+    <div id="results"></div>
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script src="config.js"></script>
+<script>
+firebase.initializeApp(FIREBASE_CONFIG);
+const db = firebase.database();
+
+let state = {};
+let votes = {};
+let votesRef = null;
+
+function openPoll(type, pollId) {
+  // Новий id опитування, щоб старі голоси не змішувалися
+  const id = pollId + '_' + Date.now();
+  db.ref('state').set({ type, pollId: id, open: true });
+}
+
+function closePoll() {
+  db.ref('state/open').set(false);
+}
+
+db.ref('state').on('value', snap => {
+  state = snap.val() || {};
+  document.getElementById('pollInfo').textContent =
+    state.open ? 'Відкрито: ' + (state.type === 'slider' ? 'слайдер' : 'меми') : 'Опитування закрито';
+  subscribeVotes();
+});
+
+function subscribeVotes() {
+  if (votesRef) votesRef.off();
+  if (!state.pollId) { render(); return; }
+  votesRef = db.ref('votes/' + state.pollId);
+  votesRef.on('value', snap => { votes = snap.val() || {}; render(); });
+}
+
+function render() {
+  const el = document.getElementById('results');
+  const list = Object.values(votes).map(v => v.value);
+  if (!state.pollId || list.length === 0) {
+    el.innerHTML = '<div class="muted">Поки немає відповідей</div>';
+    return;
+  }
+  if (state.type === 'slider') renderSlider(el, list.map(Number));
+  else renderMemes(el, list);
+}
+
+function secToLabel(s) {
+  if (s < 60) return s + ' с';
+  if (s >= 3600) return '1 год';
+  const m = Math.floor(s / 60), r = s % 60;
+  return m + ' хв' + (r ? ' ' + r + ' с' : '');
+}
+
+function renderSlider(el, secs) {
+  secs.sort((a, b) => a - b);
+  const n = secs.length;
+  const median = n % 2 ? secs[(n - 1) / 2] : (secs[n / 2 - 1] + secs[n / 2]) / 2;
+  const mean = secs.reduce((a, b) => a + b, 0) / n;
+
+  // Гістограма по логарифмічних бінах: 1с, 10с, 1хв, 10хв, 1год
+  const bins = [
+    { from: 1, to: 10, label: '1–10 с' },
+    { from: 10, to: 60, label: '10–60 с' },
+    { from: 60, to: 300, label: '1–5 хв' },
+    { from: 300, to: 900, label: '5–15 хв' },
+    { from: 900, to: 3600, label: '15–60 хв' }
+  ];
+  const counts = bins.map(b => secs.filter(s => s >= b.from && s < b.to).length);
+  const max = Math.max(1, ...counts);
+  const hist = counts.map((c, i) =>
+    `<div style="height:${(c / max) * 100}%" title="${bins[i].label}: ${c}"></div>`).join('');
+  const axis = bins.map(b => `<span>${b.label}</span>`).join('');
+
+  el.innerHTML = `
+    <div class="muted">Відповідей: ${n}</div>
+    <div style="display:flex;gap:40px;margin-top:12px">
+      <div><div class="muted">Медіана</div><div class="big">${secToLabel(Math.round(median))}</div></div>
+      <div><div class="muted">Середнє</div><div class="big">${secToLabel(Math.round(mean))}</div></div>
+    </div>
+    <div class="hist">${hist}</div>
+    <div class="axis">${axis}</div>`;
+}
+
+function renderMemes(el, choices) {
+  const total = choices.length;
+  const rows = (MEMES || []).map(m => {
+    const c = choices.filter(x => x === m.id).length;
+    const p = Math.round((c / total) * 100);
+    return `<div class="row">
+      <div class="lbl">${m.label}</div>
+      <div class="bar" style="width:${p * 3}px"></div>
+      <div class="pct">${p}% (${c})</div></div>`;
+  }).join('');
+  el.innerHTML = `<div class="muted">Відповідей: ${total}</div>${rows}`;
+}
+</script>
+</body>
+</html>
